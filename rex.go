@@ -11,6 +11,7 @@ import (
 	"reflect"
 
 	"github.com/kryovyx/dix"
+	"github.com/kryovyx/rextension/event"
 )
 
 // DefaultRouterName is the name of the default router.
@@ -44,7 +45,7 @@ type Rex interface {
 	// Container returns the root dependency injection container.
 	Container() dix.Container
 	// EventBus returns the global event bus.
-	EventBus() EventBus
+	EventBus() event.EventBus
 	// Use registers a standard HTTP middleware on the default router.
 	Use(mw Middleware)
 	// RegisterRoute registers a route on the default router.

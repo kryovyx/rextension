@@ -12,6 +12,7 @@ import (
 
 	"github.com/kryovyx/dix"
 	"github.com/kryovyx/rextension"
+	rxevent "github.com/kryovyx/rextension/event"
 )
 
 // ---- helpers ----
@@ -25,24 +26,24 @@ func (e *tEvent) Type() string             { return e.typ }
 func (e *tEvent) Context() context.Context { return e.ctx }
 
 type tBus struct {
-	subs    map[string][]rextension.EventHandler
-	emitted []rextension.Event
-	log     rextension.Logger
+	subs    map[string][]rxevent.EventHandler
+	emitted []rxevent.Event
+	log     rxevent.BusLogger
 	closed  bool
 }
 
-func mkBus() *tBus { return &tBus{subs: make(map[string][]rextension.EventHandler)} }
+func mkBus() *tBus { return &tBus{subs: make(map[string][]rxevent.EventHandler)} }
 
-func (b *tBus) Subscribe(t string, h rextension.EventHandler) {
+func (b *tBus) Subscribe(t string, h rxevent.EventHandler) {
 	b.subs[t] = append(b.subs[t], h)
 }
-func (b *tBus) Emit(e rextension.Event) {
+func (b *tBus) Emit(e rxevent.Event) {
 	b.emitted = append(b.emitted, e)
 	for _, h := range b.subs[e.Type()] {
 		h(e)
 	}
 }
-func (b *tBus) SetLogger(l rextension.Logger) { b.log = l }
+func (b *tBus) SetLogger(l rxevent.BusLogger) { b.log = l }
 func (b *tBus) Close()                        { b.closed = true }
 
 type tLog struct {
@@ -114,7 +115,7 @@ func (r *tSecRoute) RequiredSchemes() []string { return r.s }
 type tRex struct {
 	lg   rextension.Logger
 	ct   dix.Container
-	eb   rextension.EventBus
+	eb   rxevent.EventBus
 	exts []rextension.Extension
 	mws  []rextension.Middleware
 	rts  []rextension.Route
@@ -125,7 +126,7 @@ func mkRex() *tRex {
 }
 func (r *tRex) Logger() rextension.Logger                                 { return r.lg }
 func (r *tRex) Container() dix.Container                                  { return r.ct }
-func (r *tRex) EventBus() rextension.EventBus                             { return r.eb }
+func (r *tRex) EventBus() rxevent.EventBus                                { return r.eb }
 func (r *tRex) Use(mw rextension.Middleware)                              { r.mws = append(r.mws, mw) }
 func (r *tRex) RegisterRoute(rt rextension.Route) error                   { r.rts = append(r.rts, rt); return nil }
 func (r *tRex) RegisterRouteToRouter(rt rextension.Route, n string) error { return nil }
@@ -136,7 +137,7 @@ type tMinRex struct{}
 
 func (r *tMinRex) Logger() rextension.Logger                            { return nil }
 func (r *tMinRex) Container() dix.Container                             { return nil }
-func (r *tMinRex) EventBus() rextension.EventBus                        { return nil }
+func (r *tMinRex) EventBus() rxevent.EventBus                           { return nil }
 func (r *tMinRex) Use(rextension.Middleware)                            {}
 func (r *tMinRex) RegisterRoute(rextension.Route) error                 { return nil }
 func (r *tMinRex) RegisterRouteToRouter(rextension.Route, string) error { return nil }
@@ -147,7 +148,7 @@ func (r *tMinRex) CreateRouter(string, rextension.RouterConfig) error   { return
 func TestEvent_TypeAndContext(t *testing.T) {
 	ctx := context.Background()
 	ev := &tEvent{typ: "test", ctx: ctx}
-	var _ rextension.Event = ev
+	var _ rxevent.Event = ev
 	if ev.Type() != "test" {
 		t.Errorf("Type=%q", ev.Type())
 	}
@@ -166,7 +167,7 @@ func TestEvent_NilContext(t *testing.T) {
 func TestBus_SubscribeEmit(t *testing.T) {
 	b := mkBus()
 	ok := false
-	b.Subscribe("e", func(rextension.Event) { ok = true })
+	b.Subscribe("e", func(rxevent.Event) { ok = true })
 	b.Emit(&tEvent{typ: "e", ctx: context.Background()})
 	if !ok {
 		t.Error("not called")
@@ -176,8 +177,8 @@ func TestBus_SubscribeEmit(t *testing.T) {
 func TestBus_MultiHandler(t *testing.T) {
 	b := mkBus()
 	n := 0
-	b.Subscribe("e", func(rextension.Event) { n++ })
-	b.Subscribe("e", func(rextension.Event) { n++ })
+	b.Subscribe("e", func(rxevent.Event) { n++ })
+	b.Subscribe("e", func(rxevent.Event) { n++ })
 	b.Emit(&tEvent{typ: "e", ctx: context.Background()})
 	if n != 2 {
 		t.Errorf("n=%d", n)
