@@ -6,6 +6,29 @@
 // This file defines the Route interface and its default implementation.
 package route
 
+import (
+	"context"
+	"net/http"
+)
+
+// matchedRouteKey is the unexported context key for the router-matched route.
+type matchedRouteKey struct{}
+
+// SetMatchedRoute returns a new context carrying rt as the matched route.
+// Called by the router after it resolves a request to a concrete route, so
+// middleware running in the same request can access the route without
+// re-parsing the URL.
+func SetMatchedRoute(ctx context.Context, rt Route) context.Context {
+	return context.WithValue(ctx, matchedRouteKey{}, rt)
+}
+
+// GetMatchedRoute retrieves the Route stored by SetMatchedRoute.
+// Returns the route and true when present; nil and false otherwise.
+func GetMatchedRoute(r *http.Request) (Route, bool) {
+	rt, ok := r.Context().Value(matchedRouteKey{}).(Route)
+	return rt, ok
+}
+
 // Route represents a single route in the application.
 type Route interface {
 	// Method returns the HTTP method for the route (e.g., GET, POST).
