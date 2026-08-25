@@ -8,6 +8,7 @@
 package rextension
 
 import (
+	"crypto/tls"
 	"reflect"
 
 	"github.com/kryovyx/dix"
@@ -23,7 +24,14 @@ type RouterConfig struct {
 	Addr string `default:":8080"`
 	// BaseURL is the base path prefix for all routes (e.g., "/").
 	BaseURL string `default:"/"`
-	// SSLVerify enables SSL certificate verification for outbound connections.
+	// SSLVerify is currently WITHOUT EFFECT.
+	//
+	// The value is stored on the router (rex/router_default.go) and never read. It
+	// configures nothing: not outbound verification, and in particular NOT client
+	// certificate verification — the name has repeatedly been read as if it did.
+	// Client certificates are configured through TLSConfig.ClientAuth below.
+	//
+	// Kept for compatibility; do not build anything on it.
 	SSLVerify bool `default:"true"`
 	// ListenSSL toggles TLS mode for the listener when cert files are provided.
 	ListenSSL bool `default:"true"`
@@ -31,6 +39,15 @@ type RouterConfig struct {
 	CertFile *string `default:"nil"`
 	// KeyFile is the path to the TLS key file (nil disables TLS).
 	KeyFile *string `default:"nil"`
+	// TLSConfig, when non-nil, is used verbatim for the listener. It takes precedence
+	// over CertFile/KeyFile and enables per-handshake certificate selection.
+	//
+	// Set GetCertificate to swap certificates without a restart: the listener then
+	// calls it once per handshake instead of reading a file once at start.
+	//
+	// This is also where client certificate verification belongs
+	// (ClientAuth: tls.RequireAndVerifyClientCert plus ClientCAs) — not SSLVerify.
+	TLSConfig *tls.Config `default:"nil"`
 }
 
 // Option is a functional option for configuring or extending a Rex instance.

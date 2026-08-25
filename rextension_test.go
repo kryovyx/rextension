@@ -5,6 +5,7 @@ package rextension_test
 
 import (
 	"context"
+	"crypto/tls"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -459,8 +460,31 @@ func TestDefaultRouterName(t *testing.T) {
 
 func TestRouterCfg_Zero(t *testing.T) {
 	c := rextension.RouterConfig{}
-	if c.Addr != "" || c.BaseURL != "" || c.SSLVerify || c.ListenSSL || c.CertFile != nil || c.KeyFile != nil {
+	if c.Addr != "" || c.BaseURL != "" || c.SSLVerify || c.ListenSSL || c.CertFile != nil || c.KeyFile != nil || c.TLSConfig != nil {
 		t.Error("zero")
+	}
+}
+
+// TestRouterCfg_TLSConfig_defaults_to_nil pins the backwards compatibility the new
+// field depends on: a config that never mentions TLSConfig must be indistinguishable
+// from one written before the field existed, so the listener keeps using
+// CertFile/KeyFile. Only an explicitly set TLSConfig takes precedence.
+func TestRouterCfg_TLSConfig_defaults_to_nil(t *testing.T) {
+	cf, kf := "c.pem", "k.pem"
+	c := rextension.RouterConfig{Addr: ":9090", BaseURL: "/a", ListenSSL: true, CertFile: &cf, KeyFile: &kf}
+	if c.TLSConfig != nil {
+		t.Error("TLSConfig must stay nil unless set explicitly")
+	}
+}
+
+func TestRouterCfg_TLSConfig_set(t *testing.T) {
+	tc := &tls.Config{MinVersion: tls.VersionTLS12}
+	c := rextension.RouterConfig{Addr: ":9090", TLSConfig: tc}
+	if c.TLSConfig != tc {
+		t.Error("TLSConfig must be stored verbatim")
+	}
+	if c.CertFile != nil || c.KeyFile != nil {
+		t.Error("TLSConfig must not imply cert paths")
 	}
 }
 

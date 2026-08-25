@@ -128,14 +128,25 @@ type Middleware func(http.Handler) http.Handler
 
 ```go
 type RouterConfig struct {
-    Addr      string  // Listen address (e.g., ":8080")
-    BaseURL   string  // Base path prefix (e.g., "/")
-    SSLVerify bool    // Enable SSL certificate verification
-    ListenSSL bool    // Toggle TLS mode
-    CertFile  *string // Path to TLS certificate file
-    KeyFile   *string // Path to TLS key file
+    Addr      string      // Listen address (e.g., ":8080")
+    BaseURL   string      // Base path prefix (e.g., "/")
+    SSLVerify bool        // WITHOUT EFFECT - stored, never read (see below)
+    ListenSSL bool        // Toggle TLS mode
+    CertFile  *string     // Path to TLS certificate file
+    KeyFile   *string     // Path to TLS key file
+    TLSConfig *tls.Config // Takes precedence over CertFile/KeyFile
 }
 ```
+
+`TLSConfig` is the injection point for a caller-supplied `*tls.Config`. When it is set,
+the listener uses it verbatim and ignores `CertFile`/`KeyFile`. Setting `GetCertificate`
+makes the certificate a per-handshake decision, which is what allows a certificate to be
+replaced without restarting the process.
+
+`SSLVerify` configures nothing. The value is copied onto the router and never read again -
+it verifies no certificate, inbound or outbound. Client certificate verification is
+configured through `TLSConfig.ClientAuth` and `TLSConfig.ClientCAs`; the field name has
+repeatedly been mistaken for that. It is kept only for compatibility.
 
 ### SecuritySchemeAccessor
 
