@@ -31,6 +31,29 @@ type EventBus interface {
 	Close()
 }
 
+// DropCounter is implemented by an EventBus that discards events under
+// saturation and counts how many.
+//
+// The default bus never blocks on Emit — Emit is called from the request path,
+// so blocking would let one slow subscriber apply backpressure to every
+// request. Events are dropped instead, which is only an acceptable trade if
+// the loss is observable, hence this interface.
+//
+// Consumers should type-assert rather than require it:
+//
+//	if dc, ok := bus.(event.DropCounter); ok {
+//	    gauge.Set(float64(dc.Dropped()))
+//	}
+//
+// Corollary: anything that must be exact cannot be derived from bus events. An
+// in-flight request gauge can lose an increment and its matching decrement
+// independently, so it belongs in middleware, not in an event subscriber.
+type DropCounter interface {
+	// Dropped returns the cumulative number of events discarded because the
+	// queue was full or the bus was closed.
+	Dropped() uint64
+}
+
 // BusLogger is the minimal logger interface required by EventBus.SetLogger.
 // Any concrete logger that satisfies rextension.Logger also satisfies this interface,
 // keeping the event subpackage free of circular imports.

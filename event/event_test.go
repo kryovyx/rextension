@@ -139,7 +139,7 @@ func TestNewRouterInitializedEvent(t *testing.T) {
 func TestNewRouterRouteRegisteredEvent(t *testing.T) {
 	ctx := context.Background()
 	rt := &tRoute{m: "POST", p: "/items"}
-	e := event.NewRouterRouteRegisteredEvent(ctx, "default", rt)
+	e := event.NewRouterRouteRegisteredEvent(ctx, "default", rt, "")
 	if e.Type() != event.EventTypeRouterRouteRegistered {
 		t.Errorf("Type=%q", e.Type())
 	}
@@ -188,7 +188,7 @@ func TestNewRouterRequestHandledEvent(t *testing.T) {
 	req := httptest.NewRequest(http.MethodDelete, "/items/1", nil)
 	rw := httptest.NewRecorder()
 	dur := 42 * time.Millisecond
-	e := event.NewRouterRequestHandledEvent(ctx, "main", req, rw, dur)
+	e := event.NewRouterRequestHandledEvent(ctx, "main", req, rw, dur, http.StatusOK, 0, "")
 	if e.Type() != event.EventTypeRouterRequestHandled {
 		t.Errorf("Type=%q", e.Type())
 	}
@@ -231,5 +231,52 @@ func TestNewRouterUnresolvedRequestEvent(t *testing.T) {
 	}
 	if e.Method != "PUT" {
 		t.Errorf("Method=%q", e.Method)
+	}
+}
+
+// Every router event reports the router as its source.
+//
+// event.NewRouterInitializedEvent did not set source, alone among the six, so
+// Source() returned "" for it. Nothing in production read Source(), so this
+// pins the behaviour rather than fixing a live failure — and pins it for all
+// six together, which is what stops one drifting again.
+func TestRouterEvents_all_report_the_router_as_source(t *testing.T) {
+	ctx := context.Background()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	rec := httptest.NewRecorder()
+
+	cases := map[string]interface{ Source() string }{
+		"event.NewRouterEvent":                  event.NewRouterEvent(ctx, "api"),
+		"event.NewRouterInitializedEvent":       event.NewRouterInitializedEvent(ctx, "api"),
+		"event.NewRouterRouteRegisteredEvent":   event.NewRouterRouteRegisteredEvent(ctx, "api", nil, "/"),
+		"event.NewRouterRequestIncomingEvent":   event.NewRouterRequestIncomingEvent(ctx, "api", req, rec),
+		"event.NewRouterRequestHandledEvent":    event.NewRouterRequestHandledEvent(ctx, "api", req, rec, time.Second, 200, 10, "/x"),
+		"event.NewRouterUnresolvedRequestEvent": event.NewRouterUnresolvedRequestEvent(ctx, "api", http.MethodGet),
+	}
+	for name, ev := range cases {
+		if got := ev.Source(); got != "api" {
+			t.Errorf("%s: Source() = %q, want %q", name, got, "api")
+		}
+	}
+}
+
+// And each still carries its own type and router name after the flattening.
+func TestRouterEvents_keep_their_type_and_name(t *testing.T) {
+	ctx := context.Background()
+	cases := map[string]struct {
+		ev       interface{ Type() string }
+		wantType string
+	}{
+		"initialized": {event.NewRouterInitializedEvent(ctx, "api"), event.EventTypeRouterInitialized},
+		"registered":  {event.NewRouterRouteRegisteredEvent(ctx, "api", nil, "/"), event.EventTypeRouterRouteRegistered},
+		"unresolved":  {event.NewRouterUnresolvedRequestEvent(ctx, "api", http.MethodGet), event.EventTypeRouterUnresolvedRequest},
+	}
+	for name, tc := range cases {
+		if got := tc.ev.Type(); got != tc.wantType {
+			t.Errorf("%s: Type() = %q, want %q", name, got, tc.wantType)
+		}
+	}
+	if got := event.NewRouterInitializedEvent(ctx, "api").Name(); got != "api" {
+		t.Errorf("Name() = %q", got)
 	}
 }

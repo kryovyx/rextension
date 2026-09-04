@@ -11,7 +11,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/kryovyx/dix"
+	"github.com/kryovyx/rextension/di"
 )
 
 // Context represents the context of a request or operation within the rex package.
@@ -25,7 +25,10 @@ type Context interface {
 	Request() *http.Request
 
 	// Resolver exposes the DI resolver scoped to this request.
-	Resolver() dix.Resolver
+	//
+	// Typed as di.Resolver rather than dix.Resolver so a handler needs only
+	// the rextension module (D23).
+	Resolver() di.Resolver
 
 	// Respond writes a raw payload with the given status and content type.
 	Respond(status int, contentType string, body interface{}) error

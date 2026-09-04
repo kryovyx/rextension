@@ -2,8 +2,8 @@
 
 Minimal interface contract for Rex framework extensions — depend on this instead of the full `rex` module.
 
-[![Go Version](https://img.shields.io/badge/go-1.26+-blue.svg)](https://golang.org/dl/)
-[![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen.svg)](#)
+[![Go Version](https://img.shields.io/badge/go-1.27+-blue.svg)](https://golang.org/dl/)
+[![Coverage](https://img.shields.io/badge/coverage-94.9%25-brightgreen.svg)](#)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## Overview
@@ -39,7 +39,7 @@ The core interface extensions receive in their lifecycle callbacks:
 ```go
 type Rex interface {
     Logger() Logger
-    Container() dix.Container
+    Container() Container   // the DI contract declared in this module
     EventBus() EventBus
     Use(mw Middleware)
     RegisterRoute(rt Route) error
@@ -130,11 +130,18 @@ type Middleware func(http.Handler) http.Handler
 type RouterConfig struct {
     Addr      string      // Listen address (e.g., ":8080")
     BaseURL   string      // Base path prefix (e.g., "/")
-    SSLVerify bool        // WITHOUT EFFECT - stored, never read (see below)
     ListenSSL bool        // Toggle TLS mode
     CertFile  *string     // Path to TLS certificate file
     KeyFile   *string     // Path to TLS key file
     TLSConfig *tls.Config // Takes precedence over CertFile/KeyFile
+
+    // Listener limits. Zero takes the default; negative disables.
+    ReadHeaderTimeout time.Duration // default 10s — the Slowloris bound
+    ReadTimeout       time.Duration // default 30s
+    WriteTimeout      time.Duration // default 0 — unset, deliberately
+    IdleTimeout       time.Duration // default 120s
+    MaxHeaderBytes    int           // default 1 MiB
+    MaxBodyBytes      int64         // default 4 MiB
 }
 ```
 
@@ -143,10 +150,50 @@ the listener uses it verbatim and ignores `CertFile`/`KeyFile`. Setting `GetCert
 makes the certificate a per-handshake decision, which is what allows a certificate to be
 replaced without restarting the process.
 
-`SSLVerify` configures nothing. The value is copied onto the router and never read again -
-it verifies no certificate, inbound or outbound. Client certificate verification is
-configured through `TLSConfig.ClientAuth` and `TLSConfig.ClientCAs`; the field name has
-repeatedly been mistaken for that. It is kept only for compatibility.
+**Client certificate verification** is configured through `TLSConfig`:
+
+```go
+TLSConfig: &tls.Config{
+    ClientAuth: tls.RequireAndVerifyClientCert,
+    ClientCAs:  pool,
+}
+```
+
+### Listener limits
+
+`net/http` applies no timeouts and no body limit of its own, so every one of these
+defaults to "unlimited" unless something sets it. Left unset, a single client holding a
+connection open without completing its request headers occupies a goroutine for as long
+as it cares to — Slowloris — and a request body is read until the client stops sending.
+
+`ReadHeaderTimeout` is the field that closes Slowloris, because the attack works by
+trickling headers so the request never completes.
+
+**`WriteTimeout` defaults to 0 and is never filled in.** It is an absolute deadline on
+the whole response, not an idle timeout, so any non-zero value truncates responses that
+are legitimately long-lived: server-sent events, long polling, large downloads, and any
+slow client on a fast endpoint. Slowloris is a *read* attack and is already closed by
+`ReadHeaderTimeout`, so setting this buys no protection that is not already in place.
+Set it only on a router you know serves nothing streaming.
+
+A route may override the body limit by implementing `BodyLimitedRoute`:
+
+```go
+func (r *UploadRoute) MaxBodyBytes() int64 { return 64 << 20 } // 64 MiB
+func (r *IngestRoute) MaxBodyBytes() int64 { return -1 }       // no limit
+```
+
+### `SSLVerify` was removed
+
+The field configured nothing: the value was stored on the router and never read, and
+there was no code path that could have used it.
+
+It is worth saying what it was mistaken for, because the name invited the mistake more
+than once. `InsecureSkipVerify` is read by `tls.Client`, never `tls.Server` — so a
+*listener* has no such setting, and a field named `SSLVerify` on a listener config
+cannot mean what it appears to. Client certificate verification, which is what people
+reached for it expecting, is `TLSConfig.ClientAuth` above. That always worked; `SSLVerify`
+was a second door onto the same room, and it did not open.
 
 ### SecuritySchemeAccessor
 
@@ -241,15 +288,19 @@ func (e *MyExtension) OnShutdown(ctx context.Context, r rx.Rex) error { return n
 
 | Module | Purpose | Depends on |
 |--------|---------|------------|
-| `rextension` | Interface contracts for extensions | `dix` only |
+| `rextension` | Interface contracts for extensions | **nothing** |
 | `rex` | Full framework implementation | `rextension`, `dix` |
-| `rextension-*` | Extension implementations | `rextension`, `dix` (not `rex`) |
+| `rextension-*` | Extension implementations | `rextension` only (not `rex`, not `dix`) |
 
 The `rex` module re-exports all `rextension` types as aliases (e.g., `rex.Extension = rextension.Extension`), so application code that already imports `rex` continues to work unchanged.
 
 ## Best Practices
 
-1. **Depend on `rextension`, not `rex`**: Extension modules should only import `rextension` and `dix` to keep the dependency graph minimal
+1. **Depend on `rextension`, not `rex`**: an extension module should import
+   `rextension` and nothing else from this ecosystem. It does not need `dix`
+   either — the dependency-injection contract (`Container`, `Resolver`,
+   `Scope`) is declared here and satisfied by `dix`, so an extension asks for
+   `rextension.Resolver` and never names the implementation
 2. **Implement all five hooks**: Even if a hook is a no-op, provide an implementation that returns `nil`
 3. **Use `WithExtension` helpers**: Expose a `WithMyExtension()` function returning `rextension.Option` for ergonomic registration
 4. **Use the security interfaces**: If your extension deals with auth, implement `SecuritySchemeAccessor` / `SecuredRouteAccessor` to enable cross-extension OpenAPI documentation

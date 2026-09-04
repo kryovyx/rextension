@@ -8,10 +8,8 @@ import (
 	"crypto/tls"
 	"net/http"
 	"net/http/httptest"
-	"sync"
 	"testing"
 
-	"github.com/kryovyx/dix"
 	"github.com/kryovyx/rextension"
 	rxevent "github.com/kryovyx/rextension/event"
 )
@@ -113,22 +111,77 @@ type tSecRoute struct{ s []string }
 
 func (r *tSecRoute) RequiredSchemes() []string { return r.s }
 
+// tContainer is a do-nothing rextension.Container.
+//
+// The test used to construct a real dix.New(), which is what kept `dix` in
+// this module's go.mod even though no non-test file references it. The
+// compile-time proof that dix.Container satisfies rextension.Container lives
+// in the rex module, which imports both (D23).
+type tContainer struct{}
+
+func (c *tContainer) Resolve(any) error        { return nil }
+func (c *tContainer) ResolveAll(any) error     { return nil }
+func (c *tContainer) Singleton(any) error      { return nil }
+func (c *tContainer) Scoped(any) error         { return nil }
+func (c *tContainer) Transient(any) error      { return nil }
+func (c *tContainer) Instance(any) error       { return nil }
+func (c *tContainer) Unbind(any) (bool, error) { return false, nil }
+
+var _ rextension.Container = (*tContainer)(nil)
+
 type tRex struct {
-	lg   rextension.Logger
-	ct   dix.Container
-	eb   rxevent.EventBus
-	exts []rextension.Extension
-	mws  []rextension.Middleware
-	rts  []rextension.Route
+	lg        rextension.Logger
+	ct        rextension.Container
+	eb        rxevent.EventBus
+	exts      []rextension.Extension
+	mws       []rextension.Middleware
+	rts       []rextension.Route
+	routerMws []routerMW
+	perRoute  []perRouteMW
+	perRouter []perRouterMW
+}
+
+// routerMW records a UseOnRouter call.
+type routerMW struct {
+	name     string
+	mw       rextension.Middleware
+	priority int
+}
+
+// perRouteMW records a UsePerRoute call.
+type perRouteMW struct {
+	f        rextension.PerRouteMiddleware
+	priority int
+}
+
+// perRouterMW records a UsePerRouter call.
+type perRouterMW struct {
+	f        rextension.PerRouterMiddleware
+	priority int
 }
 
 func mkRex() *tRex {
-	return &tRex{lg: mkLog(), ct: dix.New(), eb: mkBus()}
+	return &tRex{lg: mkLog(), ct: &tContainer{}, eb: mkBus()}
 }
-func (r *tRex) Logger() rextension.Logger                                 { return r.lg }
-func (r *tRex) Container() dix.Container                                  { return r.ct }
-func (r *tRex) EventBus() rxevent.EventBus                                { return r.eb }
-func (r *tRex) Use(mw rextension.Middleware)                              { r.mws = append(r.mws, mw) }
+func (r *tRex) Logger() rextension.Logger       { return r.lg }
+func (r *tRex) Container() rextension.Container { return r.ct }
+func (r *tRex) EventBus() rxevent.EventBus      { return r.eb }
+func (r *tRex) Use(mw rextension.Middleware)    { r.mws = append(r.mws, mw) }
+
+// UseOnRouter and UsePerRoute record their arguments so tests can assert what
+// an extension attached, and to which routes.
+func (r *tRex) UseOnRouter(name string, mw rextension.Middleware, priority int) {
+	r.routerMws = append(r.routerMws, routerMW{name: name, mw: mw, priority: priority})
+}
+
+func (r *tRex) UsePerRoute(f rextension.PerRouteMiddleware, priority int) {
+	r.perRoute = append(r.perRoute, perRouteMW{f: f, priority: priority})
+}
+
+func (r *tRex) UsePerRouter(f rextension.PerRouterMiddleware, priority int) {
+	r.perRouter = append(r.perRouter, perRouterMW{f: f, priority: priority})
+}
+
 func (r *tRex) RegisterRoute(rt rextension.Route) error                   { r.rts = append(r.rts, rt); return nil }
 func (r *tRex) RegisterRouteToRouter(rt rextension.Route, n string) error { return nil }
 func (r *tRex) CreateRouter(n string, c rextension.RouterConfig) error    { return nil }
@@ -137,9 +190,12 @@ func (r *tRex) WithExtensions(ext ...rextension.Extension)                { r.ex
 type tMinRex struct{}
 
 func (r *tMinRex) Logger() rextension.Logger                            { return nil }
-func (r *tMinRex) Container() dix.Container                             { return nil }
+func (r *tMinRex) Container() rextension.Container                      { return nil }
 func (r *tMinRex) EventBus() rxevent.EventBus                           { return nil }
 func (r *tMinRex) Use(rextension.Middleware)                            {}
+func (r *tMinRex) UseOnRouter(string, rextension.Middleware, int)       {}
+func (r *tMinRex) UsePerRoute(rextension.PerRouteMiddleware, int)       {}
+func (r *tMinRex) UsePerRouter(rextension.PerRouterMiddleware, int)     {}
 func (r *tMinRex) RegisterRoute(rextension.Route) error                 { return nil }
 func (r *tMinRex) RegisterRouteToRouter(rextension.Route, string) error { return nil }
 func (r *tMinRex) CreateRouter(string, rextension.RouterConfig) error   { return nil }
@@ -400,54 +456,70 @@ func TestSchemeAccessor_Fields(t *testing.T) {
 	}
 }
 
-func TestGlobalSchemes_RegisterGet(t *testing.T) {
-	rextension.RegisterSecuritySchemes(nil)
-	if rextension.GetSecuritySchemes() != nil {
-		t.Error("expect nil")
+// The four TestGlobalSchemes_* tests that stood here are gone with the
+// package-level scheme registry they exercised (D21).
+//
+// They are worth remembering as an illustration rather than a loss:
+// TestGlobalSchemes_Overwrite asserted that a second Register **replaced** the
+// first, and TestGlobalSchemes_RegisterGet and _Snapshot each reset the global
+// to nil on the way out so the next test would not see their schemes. Both are
+// tests written around process-global state — the first codifying the
+// clobbering behaviour as intended, the second working around the leakage.
+//
+// The replacement is an instance registered in the DI container, whose
+// lifetime is the application that created it. The SchemeRegistry contract it
+// satisfies is asserted below.
+
+func TestSchemeRegistry_ContractIsSatisfiable(t *testing.T) {
+	// A registry implementation must accept schemes, list them in order, and
+	// look one up by name. The concrete implementation lives in
+	// rextension-security; this only pins the shape the contract promises.
+	var r rextension.SchemeRegistry = &tRegistry{}
+
+	r.Register(&tScheme{n: "a"}, &tScheme{n: "b"})
+	got := r.Schemes()
+	if len(got) != 2 || got[0].Name() != "a" || got[1].Name() != "b" {
+		t.Fatalf("expected registration order [a b], got %v", got)
 	}
-	rextension.RegisterSecuritySchemes([]rextension.SecuritySchemeAccessor{
-		&tScheme{n: "a"}, &tScheme{n: "b"},
-	})
-	r := rextension.GetSecuritySchemes()
-	if len(r) != 2 || r[0].Name() != "a" || r[1].Name() != "b" {
-		t.Error("mismatch")
+	if s, ok := r.Lookup("b"); !ok || s.Name() != "b" {
+		t.Fatalf("Lookup(b) = %v, %v", s, ok)
 	}
-	rextension.RegisterSecuritySchemes(nil)
+	if _, ok := r.Lookup("missing"); ok {
+		t.Fatal("Lookup returned a scheme that was never registered")
+	}
 }
 
-func TestGlobalSchemes_Snapshot(t *testing.T) {
-	rextension.RegisterSecuritySchemes([]rextension.SecuritySchemeAccessor{&tScheme{n: "x"}})
-	a := rextension.GetSecuritySchemes()
-	b := rextension.GetSecuritySchemes()
-	a[0] = &tScheme{n: "changed"}
-	if b[0].Name() != "x" {
-		t.Error("snapshot")
-	}
-	rextension.RegisterSecuritySchemes(nil)
+// tRegistry is a minimal rextension.SchemeRegistry.
+type tRegistry struct {
+	ordered []rextension.SecuritySchemeAccessor
+	byName  map[string]rextension.SecuritySchemeAccessor
 }
 
-func TestGlobalSchemes_Overwrite(t *testing.T) {
-	rextension.RegisterSecuritySchemes([]rextension.SecuritySchemeAccessor{&tScheme{n: "old"}})
-	rextension.RegisterSecuritySchemes([]rextension.SecuritySchemeAccessor{&tScheme{n: "n1"}, &tScheme{n: "n2"}})
-	r := rextension.GetSecuritySchemes()
-	if len(r) != 2 || r[0].Name() != "n1" {
-		t.Error("overwrite")
+func (r *tRegistry) Register(schemes ...rextension.SecuritySchemeAccessor) {
+	if r.byName == nil {
+		r.byName = map[string]rextension.SecuritySchemeAccessor{}
 	}
-	rextension.RegisterSecuritySchemes(nil)
+	for _, s := range schemes {
+		if s == nil || s.Name() == "" {
+			continue
+		}
+		if _, exists := r.byName[s.Name()]; exists {
+			continue
+		}
+		r.byName[s.Name()] = s
+		r.ordered = append(r.ordered, s)
+	}
 }
 
-func TestGlobalSchemes_Concurrent(t *testing.T) {
-	var wg sync.WaitGroup
-	for i := 0; i < 20; i++ {
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			rextension.RegisterSecuritySchemes([]rextension.SecuritySchemeAccessor{&tScheme{n: "s"}})
-		}()
-		go func() { defer wg.Done(); _ = rextension.GetSecuritySchemes() }()
-	}
-	wg.Wait()
-	rextension.RegisterSecuritySchemes(nil)
+func (r *tRegistry) Schemes() []rextension.SecuritySchemeAccessor {
+	out := make([]rextension.SecuritySchemeAccessor, len(r.ordered))
+	copy(out, r.ordered)
+	return out
+}
+
+func (r *tRegistry) Lookup(name string) (rextension.SecuritySchemeAccessor, bool) {
+	s, ok := r.byName[name]
+	return s, ok
 }
 
 // ---- Rex ----
@@ -460,7 +532,7 @@ func TestDefaultRouterName(t *testing.T) {
 
 func TestRouterCfg_Zero(t *testing.T) {
 	c := rextension.RouterConfig{}
-	if c.Addr != "" || c.BaseURL != "" || c.SSLVerify || c.ListenSSL || c.CertFile != nil || c.KeyFile != nil || c.TLSConfig != nil {
+	if c.Addr != "" || c.BaseURL != "" || c.ListenSSL || c.CertFile != nil || c.KeyFile != nil || c.TLSConfig != nil {
 		t.Error("zero")
 	}
 }
@@ -490,8 +562,8 @@ func TestRouterCfg_TLSConfig_set(t *testing.T) {
 
 func TestRouterCfg_Set(t *testing.T) {
 	cf, kf := "c.pem", "k.pem"
-	c := rextension.RouterConfig{Addr: ":9090", BaseURL: "/a", SSLVerify: true, ListenSSL: true, CertFile: &cf, KeyFile: &kf}
-	if c.Addr != ":9090" || c.BaseURL != "/a" || !c.SSLVerify || !c.ListenSSL || *c.CertFile != cf || *c.KeyFile != kf {
+	c := rextension.RouterConfig{Addr: ":9090", BaseURL: "/a", ListenSSL: true, CertFile: &cf, KeyFile: &kf}
+	if c.Addr != ":9090" || c.BaseURL != "/a" || !c.ListenSSL || *c.CertFile != cf || *c.KeyFile != kf {
 		t.Error("set")
 	}
 }

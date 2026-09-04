@@ -8,8 +8,6 @@
 // extension — without either needing to import the other.
 package rextension
 
-import "sync"
-
 // SecuredRouteAccessor is the minimal interface a route may implement to declare
 // which security schemes are required. Mirrored here so OpenAPI and Security
 // extensions share the type without importing each other.
@@ -33,31 +31,21 @@ type SecuritySchemeAccessor interface {
 	Challenge() string
 }
 
-var (
-	globalSecuritySchemes []SecuritySchemeAccessor
-	globalSchemesMu       sync.Mutex
-)
-
-// RegisterSecuritySchemes stores a set of security schemes in a package-level
-// registry. Call this from the security extension's OnStart/OnInitialize so
-// that the OpenAPI extension can retrieve them at document-generation time
-// without any direct import dependency between the two extensions.
-func RegisterSecuritySchemes(schemes []SecuritySchemeAccessor) {
-	globalSchemesMu.Lock()
-	globalSecuritySchemes = make([]SecuritySchemeAccessor, len(schemes))
-	copy(globalSecuritySchemes, schemes)
-	globalSchemesMu.Unlock()
-}
-
-// GetSecuritySchemes returns a snapshot of all registered security schemes.
-// Returns nil when no schemes have been registered.
-func GetSecuritySchemes() []SecuritySchemeAccessor {
-	globalSchemesMu.Lock()
-	defer globalSchemesMu.Unlock()
-	if len(globalSecuritySchemes) == 0 {
-		return nil
-	}
-	result := make([]SecuritySchemeAccessor, len(globalSecuritySchemes))
-	copy(result, globalSecuritySchemes)
-	return result
-}
+// The package-level scheme registry that used to live here is gone (D21).
+//
+// It was a package-level slice written by RegisterSecuritySchemes and read by
+// GetSecuritySchemes. Three problems, in increasing order of severity:
+//
+//  1. RegisterSecuritySchemes **replaced** the slice rather than appending, and
+//     there was no unregister. Two Rex instances in one process therefore
+//     clobbered each other's schemes — whichever started last won, for both.
+//  2. The state outlived any single application, so it leaked between tests in
+//     the same binary: a test that registered schemes changed the result of
+//     every later test that read them.
+//  3. Nothing owned it, so nothing could reset it.
+//
+// The replacement is an instance: the security extension registers a
+// SchemeRegistry in the DI container, and the OpenAPI extension resolves it
+// through the SchemeRegistry interface. Same decoupling — neither extension
+// imports the other — with a lifetime bounded by the application that created
+// it.
