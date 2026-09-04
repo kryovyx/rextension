@@ -20,27 +20,29 @@ type Route interface {
 	Path() string
 }
 
-// BaseEvent carries the common fields shared by all events.
-type BaseEvent struct {
-	eventType string
-	ctx       context.Context
-	source    string
-}
-
-// NewBaseEvent creates a BaseEvent with the given type, source, and context.
-// Primarily used to create events for testing.
-func NewBaseEvent(ctx context.Context, eventType, source string) BaseEvent {
-	return BaseEvent{eventType: eventType, ctx: ctx, source: source}
-}
-
-// Type returns the event type identifier.
-func (e BaseEvent) Type() string { return e.eventType }
-
-// Context returns the context associated with the event.
-func (e BaseEvent) Context() context.Context { return e.ctx }
-
-// Source returns the producer of the event, such as a router name.
-func (e BaseEvent) Source() string { return e.source }
+// BaseEvent, its constructor and its three accessors moved to corex/event
+// (W22), so that WSX's conn.* and gateway.* events embed the same base and one
+// bus carries both streams.
+//
+// # Why every constructor below changed shape
+//
+// They used to name BaseEvent's promoted fields directly:
+//
+//	return RouterEvent{eventType: RouterEventType, ctx: ctx, source: name, ...}
+//
+// Those fields are unexported, and they are now in another module, so that
+// literal no longer compiles. This is the one place in the extraction where an
+// alias could not carry a symbol across without a source change — and the
+// cause is worth stating rather than working around, because the constructor
+// it forces us onto is the correct entry point: BaseEvent's fields are
+// unexported precisely so an event cannot be built with no type and no
+// context, then travel the bus and dispatch to nothing.
+//
+// NewBaseEvent already existed for exactly this, described as "primarily used
+// to create events for testing". It is now the supported way to embed the
+// base, and corex pins the boundary with a test that embeds it from outside.
+//
+// Behaviour is unchanged: same fields, same values, same accessors.
 
 // RouterEvent is the base event for router notifications.
 type RouterEvent struct {
@@ -54,9 +56,7 @@ func (e RouterEvent) Name() string { return e.RouterName }
 // NewRouterEvent constructs a generic router event for the given router name.
 func NewRouterEvent(ctx context.Context, routerName string) RouterEvent {
 	return RouterEvent{
-		eventType:  RouterEventType,
-		ctx:        ctx,
-		source:     routerName,
+		BaseEvent:  NewBaseEvent(ctx, RouterEventType, routerName),
 		RouterName: routerName,
 	}
 }
@@ -69,14 +69,20 @@ type RouterInitializedEvent struct {
 // NewRouterInitializedEvent creates a new router initialization event.
 func NewRouterInitializedEvent(ctx context.Context, routerName string) RouterInitializedEvent {
 	return RouterInitializedEvent{
-		eventType: EventTypeRouterInitialized,
-		ctx:       ctx,
-		// source was not set here, alone among the six constructors, so
+		// Built explicitly rather than by delegating to NewRouterEvent, which
+		// would stamp the generic RouterEventType and lose this event's own
+		// type. Both of this package's assertions about that caught it when
+		// the rewrite tried the shorter form.
+		//
+		// `source` was once not set here, alone among the six constructors, so
 		// Source() returned "" for this event and the router name for every
-		// other. Three levels of nesting is what hid it; one level is what
-		// showed it.
-		source:     routerName,
-		RouterName: routerName,
+		// other. Three levels of nesting is what hid it; going through
+		// NewBaseEvent is what makes it impossible now, because there is no
+		// field to forget — only an argument the compiler requires.
+		RouterEvent: RouterEvent{
+			BaseEvent:  NewBaseEvent(ctx, EventTypeRouterInitialized, routerName),
+			RouterName: routerName,
+		},
 	}
 }
 
@@ -102,12 +108,12 @@ type RouterRouteRegisteredEvent struct {
 // NewRouterRouteRegisteredEvent constructs a route registration event.
 func NewRouterRouteRegisteredEvent(ctx context.Context, routerName string, rt Route, baseURL string) RouterRouteRegisteredEvent {
 	return RouterRouteRegisteredEvent{
-		eventType:  EventTypeRouterRouteRegistered,
-		ctx:        ctx,
-		source:     routerName,
-		RouterName: routerName,
-		Route:      rt,
-		BaseURL:    baseURL,
+		RouterEvent: RouterEvent{
+			BaseEvent:  NewBaseEvent(ctx, EventTypeRouterRouteRegistered, routerName),
+			RouterName: routerName,
+		},
+		Route:   rt,
+		BaseURL: baseURL,
 	}
 }
 
@@ -121,10 +127,10 @@ type RouterRequestIncomingEvent struct {
 // NewRouterRequestIncomingEvent constructs an incoming-request event instance.
 func NewRouterRequestIncomingEvent(ctx context.Context, routerName string, req *http.Request, rw http.ResponseWriter) RouterRequestIncomingEvent {
 	return RouterRequestIncomingEvent{
-		eventType:      EventTypeRouterRequestIncoming,
-		ctx:            ctx,
-		source:         routerName,
-		RouterName:     routerName,
+		RouterEvent: RouterEvent{
+			BaseEvent:  NewBaseEvent(ctx, EventTypeRouterRequestIncoming, routerName),
+			RouterName: routerName,
+		},
 		Request:        req,
 		ResponseWriter: rw,
 	}
@@ -178,10 +184,10 @@ func NewRouterRequestHandledEvent(
 	routePattern string,
 ) RouterRequestHandledEvent {
 	return RouterRequestHandledEvent{
-		eventType:      EventTypeRouterRequestHandled,
-		ctx:            ctx,
-		source:         routerName,
-		RouterName:     routerName,
+		RouterEvent: RouterEvent{
+			BaseEvent:  NewBaseEvent(ctx, EventTypeRouterRequestHandled, routerName),
+			RouterName: routerName,
+		},
 		Request:        req,
 		ResponseWriter: rw,
 		Duration:       dur,
@@ -200,10 +206,10 @@ type RouterUnresolvedRequestEvent struct {
 // NewRouterUnresolvedRequestEvent constructs an unresolved-request event.
 func NewRouterUnresolvedRequestEvent(ctx context.Context, routerName, method string) RouterUnresolvedRequestEvent {
 	return RouterUnresolvedRequestEvent{
-		eventType:  EventTypeRouterUnresolvedRequest,
-		ctx:        ctx,
-		source:     routerName,
-		RouterName: routerName,
-		Method:     method,
+		RouterEvent: RouterEvent{
+			BaseEvent:  NewBaseEvent(ctx, EventTypeRouterUnresolvedRequest, routerName),
+			RouterName: routerName,
+		},
+		Method: method,
 	}
 }

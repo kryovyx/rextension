@@ -68,60 +68,6 @@ type PerRouteMiddleware func(rt RouteInfo) Middleware
 // lookup and a lock for a value that never changes.
 type PerRouterMiddleware func(routerName string) Middleware
 
-// Middleware chain priorities.
-//
-// Lower runs further out: PriorityRecovery wraps everything, PriorityDefault is
-// innermost, closest to the handler. Middleware with equal priority keeps
-// registration order.
-//
-// The scale is fixed rather than left to registration order because the order
-// is *semantic*, not a matter of taste. Getting it wrong produces bugs that do
-// not look like ordering bugs:
-//
-//   - Rate limiting must precede authentication, or a flood of unauthenticated
-//     requests each costs a password hash or a token verification before being
-//     rejected. The limiter then protects nothing; it just adds work.
-//   - CSRF must follow authentication, because a double-submit check needs the
-//     session the authenticator established.
-//   - Validation must follow both, or bodies get parsed for requests that were
-//     always going to be refused.
-//   - Recovery must be outermost, or a panic anywhere below it escapes to
-//     net/http and kills the connection with no response written.
-//
-// Leaving that to whichever order New() happened to receive its extensions in
-// guarantees a subtle production bug eventually, and one that reproduces only
-// on the machine where the arguments were reordered.
-const (
-	// PriorityRecovery is the outermost position: catch panics from everything
-	// inside, including other middleware.
-	PriorityRecovery = 100
-
-	// PriorityCORS answers preflights and decorates responses before any
-	// authentication or rate limiting rejects them — a browser needs the CORS
-	// headers on the error response too, or it reports an opaque failure
-	// instead of the actual status.
-	PriorityCORS = 200
-
-	// PriorityRateLimit rejects floods before anything expensive happens.
-	PriorityRateLimit = 300
-
-	// PriorityAuth authenticates the request and establishes the principal.
-	PriorityAuth = 400
-
-	// PriorityCSRF verifies the request came from an allowed origin. After
-	// auth: it needs the session.
-	PriorityCSRF = 450
-
-	// PriorityValidation parses and validates the request. After auth and rate
-	// limiting, so rejected requests are never parsed.
-	PriorityValidation = 500
-
-	// PriorityHealthGate refuses requests whose declared dependencies are
-	// unavailable. Late, because it is about this route's backing services
-	// rather than about the caller.
-	PriorityHealthGate = 600
-
-	// PriorityDefault is the innermost position, closest to the handler. Use
-	// it for anything that only observes — metrics, tracing, access logging.
-	PriorityDefault = 1000
-)
+// The Priority* scale that stood here is in corex now (W22), because WSX's
+// handshake chain reuses the same numbers — see middleware.go for the
+// re-exports and for why a constant is re-declared rather than aliased.

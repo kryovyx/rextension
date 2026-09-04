@@ -3,48 +3,33 @@
 
 // Package rextension defines the minimal interface contract for Rex framework extensions.
 //
-// This file declares the Logger interface used by extensions.
+// This file re-exports the logger contract from corex, where it moved so that
+// one logger can be handed to a router and to a WebSocket gateway in the same
+// process and produce one stream (W22).
 package rextension
 
-// LogLevel represents the logging level.
-type LogLevel int
+import "github.com/kryovyx/corex"
 
+// LogLevel represents the logging level. Aliased from corex.
+type LogLevel = corex.LogLevel
+
+// Log levels, re-declared by value: a constant has no alias form.
 const (
 	// LogLevelTrace is the most verbose level.
-	LogLevelTrace LogLevel = iota
+	LogLevelTrace = corex.LogLevelTrace
 	// LogLevelDebug is for debug messages.
-	LogLevelDebug
+	LogLevelDebug = corex.LogLevelDebug
 	// LogLevelInfo is for informational messages.
-	LogLevelInfo
+	LogLevelInfo = corex.LogLevelInfo
 	// LogLevelWarn is for warning messages.
-	LogLevelWarn
+	LogLevelWarn = corex.LogLevelWarn
 	// LogLevelError is for error messages.
-	LogLevelError
+	LogLevelError = corex.LogLevelError
 	// LogLevelOff disables all logging.
-	LogLevelOff
+	LogLevelOff = corex.LogLevelOff
 )
 
 // Logger defines the logging interface for the Rex framework.
-// The full logger implementation lives in github.com/kryovyx/rex/logger;
-// this interface is the canonical source so that extensions can depend on
-// rextension only.
-type Logger interface {
-	// Info logs an informational message.
-	Info(format string, args ...interface{})
-	// Warn logs a warning message.
-	Warn(format string, args ...interface{})
-	// Error logs an error message.
-	Error(format string, args ...interface{})
-	// Debug logs a debug message.
-	Debug(format string, args ...interface{})
-	// Trace logs a trace message.
-	Trace(format string, args ...interface{})
-	// SetLogLevel sets the minimum log level.
-	SetLogLevel(level LogLevel)
-	// WithField returns a logger with an additional field.
-	WithField(key string, value interface{}) Logger
-	// WithFields returns a logger with additional fields.
-	WithFields(fields map[string]interface{}) Logger
-	// WithError returns a logger with an error field.
-	WithError(err error) Logger
-}
+// Aliased from corex; the full implementation lives in
+// github.com/kryovyx/rex/logger.
+type Logger = corex.Logger

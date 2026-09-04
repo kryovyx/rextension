@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/tls"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/kryovyx/rextension"
@@ -15,14 +14,6 @@ import (
 )
 
 // ---- helpers ----
-
-type tEvent struct {
-	typ string
-	ctx context.Context
-}
-
-func (e *tEvent) Type() string             { return e.typ }
-func (e *tEvent) Context() context.Context { return e.ctx }
 
 type tBus struct {
 	subs    map[string][]rxevent.EventHandler
@@ -99,17 +90,6 @@ type tRoute struct{ m, p string }
 
 func (r *tRoute) Method() string { return r.m }
 func (r *tRoute) Path() string   { return r.p }
-
-type tScheme struct{ n, t, d, c string }
-
-func (s *tScheme) Name() string        { return s.n }
-func (s *tScheme) Type() string        { return s.t }
-func (s *tScheme) Description() string { return s.d }
-func (s *tScheme) Challenge() string   { return s.c }
-
-type tSecRoute struct{ s []string }
-
-func (r *tSecRoute) RequiredSchemes() []string { return r.s }
 
 // tContainer is a do-nothing rextension.Container.
 //
@@ -200,67 +180,9 @@ func (r *tMinRex) RegisterRoute(rextension.Route) error                 { return
 func (r *tMinRex) RegisterRouteToRouter(rextension.Route, string) error { return nil }
 func (r *tMinRex) CreateRouter(string, rextension.RouterConfig) error   { return nil }
 
-// ---- Event ----
-
-func TestEvent_TypeAndContext(t *testing.T) {
-	ctx := context.Background()
-	ev := &tEvent{typ: "test", ctx: ctx}
-	var _ rxevent.Event = ev
-	if ev.Type() != "test" {
-		t.Errorf("Type=%q", ev.Type())
-	}
-	if ev.Context() != ctx {
-		t.Error("ctx mismatch")
-	}
-}
-
-func TestEvent_NilContext(t *testing.T) {
-	ev := &tEvent{typ: "x"}
-	if ev.Context() != nil {
-		t.Error("expected nil")
-	}
-}
-
-func TestBus_SubscribeEmit(t *testing.T) {
-	b := mkBus()
-	ok := false
-	b.Subscribe("e", func(rxevent.Event) { ok = true })
-	b.Emit(&tEvent{typ: "e", ctx: context.Background()})
-	if !ok {
-		t.Error("not called")
-	}
-}
-
-func TestBus_MultiHandler(t *testing.T) {
-	b := mkBus()
-	n := 0
-	b.Subscribe("e", func(rxevent.Event) { n++ })
-	b.Subscribe("e", func(rxevent.Event) { n++ })
-	b.Emit(&tEvent{typ: "e", ctx: context.Background()})
-	if n != 2 {
-		t.Errorf("n=%d", n)
-	}
-}
-
-func TestBus_NoSub(t *testing.T) {
-	b := mkBus()
-	b.Emit(&tEvent{typ: "x", ctx: context.Background()})
-	if len(b.emitted) != 1 {
-		t.Error("emit count")
-	}
-}
-
-func TestBus_SetLogClose(t *testing.T) {
-	b := mkBus()
-	b.SetLogger(mkLog())
-	if b.log == nil {
-		t.Error("log nil")
-	}
-	b.Close()
-	if !b.closed {
-		t.Error("not closed")
-	}
-}
+// The Event and EventBus contract tests moved to corex/event with the
+// declarations (W22). The bus is still reached through rextension/event, and
+// that package's own suite covers the re-exports.
 
 // ---- Extension ----
 
@@ -284,133 +206,9 @@ func TestExt_Error(t *testing.T) {
 	}
 }
 
-// ---- LogLevel ----
-
-func TestLogLevel_Values(t *testing.T) {
-	vals := []struct {
-		n string
-		l rextension.LogLevel
-		v int
-	}{
-		{"Trace", rextension.LogLevelTrace, 0},
-		{"Debug", rextension.LogLevelDebug, 1},
-		{"Info", rextension.LogLevelInfo, 2},
-		{"Warn", rextension.LogLevelWarn, 3},
-		{"Error", rextension.LogLevelError, 4},
-		{"Off", rextension.LogLevelOff, 5},
-	}
-	for _, tt := range vals {
-		t.Run(tt.n, func(t *testing.T) {
-			if int(tt.l) != tt.v {
-				t.Errorf("%d!=%d", int(tt.l), tt.v)
-			}
-		})
-	}
-}
-
-func TestLogLevel_Order(t *testing.T) {
-	if !(rextension.LogLevelTrace < rextension.LogLevelDebug &&
-		rextension.LogLevelDebug < rextension.LogLevelInfo &&
-		rextension.LogLevelInfo < rextension.LogLevelWarn &&
-		rextension.LogLevelWarn < rextension.LogLevelError &&
-		rextension.LogLevelError < rextension.LogLevelOff) {
-		t.Error("bad order")
-	}
-}
-
-// ---- Logger ----
-
-func TestLog_AllMethods(t *testing.T) {
-	l := mkLog()
-	l.Info("i")
-	l.Warn("w")
-	l.Error("e")
-	l.Debug("d")
-	l.Trace("t")
-	if len(l.is) != 1 || len(l.ws) != 1 || len(l.es) != 1 || len(l.ds) != 1 || len(l.ts) != 1 {
-		t.Error("missing logs")
-	}
-}
-
-func TestLog_SetLevel(t *testing.T) {
-	l := mkLog()
-	l.SetLogLevel(rextension.LogLevelDebug)
-	if l.lvl != rextension.LogLevelDebug {
-		t.Error("level")
-	}
-}
-
-func TestLog_WithField(t *testing.T) {
-	l := mkLog()
-	n := l.WithField("k", "v").(*tLog)
-	if n.fld["k"] != "v" {
-		t.Error("field")
-	}
-}
-
-func TestLog_WithFields(t *testing.T) {
-	l := mkLog()
-	n := l.WithFields(map[string]interface{}{"a": 1, "b": 2}).(*tLog)
-	if n.fld["a"] != 1 || n.fld["b"] != 2 {
-		t.Error("fields")
-	}
-}
-
-func TestLog_WithError(t *testing.T) {
-	l := mkLog()
-	n := l.WithError(context.DeadlineExceeded).(*tLog)
-	if n.errVal != context.DeadlineExceeded {
-		t.Error("err")
-	}
-}
-
-// ---- Middleware ----
-
-func TestMW_Wrap(t *testing.T) {
-	var mw rextension.Middleware = func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("X-T", "1")
-			next.ServeHTTP(w, r)
-		})
-	}
-	h := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
-	rec := httptest.NewRecorder()
-	mw(h).ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
-	if rec.Header().Get("X-T") != "1" {
-		t.Error("header")
-	}
-}
-
-func TestMW_Chain(t *testing.T) {
-	var o []string
-	m1 := rextension.Middleware(func(n http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { o = append(o, "1"); n.ServeHTTP(w, r) })
-	})
-	m2 := rextension.Middleware(func(n http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { o = append(o, "2"); n.ServeHTTP(w, r) })
-	})
-	h := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { o = append(o, "h") })
-	m1(m2(h)).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
-	if len(o) != 3 || o[0] != "1" || o[1] != "2" || o[2] != "h" {
-		t.Errorf("order=%v", o)
-	}
-}
-
-func TestMW_ShortCircuit(t *testing.T) {
-	mw := rextension.Middleware(func(http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(403) })
-	})
-	called := false
-	h := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true })
-	rec := httptest.NewRecorder()
-	mw(h).ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
-	if called {
-		t.Error("called")
-	}
-	if rec.Code != 403 {
-		t.Errorf("code=%d", rec.Code)
-	}
-}
+// The LogLevel, Logger and Middleware tests moved to corex with the
+// declarations. What has to be tested *here* is that the aliases resolve to
+// those declarations rather than to copies — see corex_alias_test.go.
 
 // ---- Route ----
 
@@ -431,96 +229,9 @@ func TestRoute_AllHTTPMethods(t *testing.T) {
 	}
 }
 
-// ---- Security ----
-
-func TestSecRoute_WithSchemes(t *testing.T) {
-	var _ rextension.SecuredRouteAccessor = &tSecRoute{}
-	s := &tSecRoute{s: []string{"bearer", "apikey"}}
-	if len(s.RequiredSchemes()) != 2 {
-		t.Error("len")
-	}
-}
-
-func TestSecRoute_Nil(t *testing.T) {
-	s := &tSecRoute{}
-	if s.RequiredSchemes() != nil {
-		t.Error("expected nil")
-	}
-}
-
-func TestSchemeAccessor_Fields(t *testing.T) {
-	var _ rextension.SecuritySchemeAccessor = &tScheme{}
-	s := &tScheme{n: "b", t: "http", d: "desc", c: "Bearer"}
-	if s.Name() != "b" || s.Type() != "http" || s.Description() != "desc" || s.Challenge() != "Bearer" {
-		t.Error("field")
-	}
-}
-
-// The four TestGlobalSchemes_* tests that stood here are gone with the
-// package-level scheme registry they exercised (D21).
-//
-// They are worth remembering as an illustration rather than a loss:
-// TestGlobalSchemes_Overwrite asserted that a second Register **replaced** the
-// first, and TestGlobalSchemes_RegisterGet and _Snapshot each reset the global
-// to nil on the way out so the next test would not see their schemes. Both are
-// tests written around process-global state — the first codifying the
-// clobbering behaviour as intended, the second working around the leakage.
-//
-// The replacement is an instance registered in the DI container, whose
-// lifetime is the application that created it. The SchemeRegistry contract it
-// satisfies is asserted below.
-
-func TestSchemeRegistry_ContractIsSatisfiable(t *testing.T) {
-	// A registry implementation must accept schemes, list them in order, and
-	// look one up by name. The concrete implementation lives in
-	// rextension-security; this only pins the shape the contract promises.
-	var r rextension.SchemeRegistry = &tRegistry{}
-
-	r.Register(&tScheme{n: "a"}, &tScheme{n: "b"})
-	got := r.Schemes()
-	if len(got) != 2 || got[0].Name() != "a" || got[1].Name() != "b" {
-		t.Fatalf("expected registration order [a b], got %v", got)
-	}
-	if s, ok := r.Lookup("b"); !ok || s.Name() != "b" {
-		t.Fatalf("Lookup(b) = %v, %v", s, ok)
-	}
-	if _, ok := r.Lookup("missing"); ok {
-		t.Fatal("Lookup returned a scheme that was never registered")
-	}
-}
-
-// tRegistry is a minimal rextension.SchemeRegistry.
-type tRegistry struct {
-	ordered []rextension.SecuritySchemeAccessor
-	byName  map[string]rextension.SecuritySchemeAccessor
-}
-
-func (r *tRegistry) Register(schemes ...rextension.SecuritySchemeAccessor) {
-	if r.byName == nil {
-		r.byName = map[string]rextension.SecuritySchemeAccessor{}
-	}
-	for _, s := range schemes {
-		if s == nil || s.Name() == "" {
-			continue
-		}
-		if _, exists := r.byName[s.Name()]; exists {
-			continue
-		}
-		r.byName[s.Name()] = s
-		r.ordered = append(r.ordered, s)
-	}
-}
-
-func (r *tRegistry) Schemes() []rextension.SecuritySchemeAccessor {
-	out := make([]rextension.SecuritySchemeAccessor, len(r.ordered))
-	copy(out, r.ordered)
-	return out
-}
-
-func (r *tRegistry) Lookup(name string) (rextension.SecuritySchemeAccessor, bool) {
-	s, ok := r.byName[name]
-	return s, ok
-}
+// The security accessor and SchemeRegistry contract tests moved to corex,
+// along with the note about the four TestGlobalSchemes_* tests that D21
+// deleted with the package-level registry they exercised.
 
 // ---- Rex ----
 
