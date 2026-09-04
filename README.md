@@ -3,26 +3,46 @@
 Minimal interface contract for Rex framework extensions — depend on this instead of the full `rex` module.
 
 [![Go Version](https://img.shields.io/badge/go-1.27+-blue.svg)](https://golang.org/dl/)
-[![Coverage](https://img.shields.io/badge/coverage-94.9%25-brightgreen.svg)](#)
+[![Coverage](https://img.shields.io/badge/coverage-100.0%25-brightgreen.svg)](#)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## Overview
 
 `rextension` defines the canonical interfaces that Rex extensions implement and interact with. By depending on this lightweight module instead of the full `rex` implementation, extension authors avoid pulling in the entire framework as a dependency.
 
-This module provides:
+Declared here — the HTTP-and-routing contract:
 
 - **Rex interface**: The subset of the framework API available to extensions
 - **Extension interface**: Five lifecycle hooks for application customization
-- **Logger interface**: Logging abstraction with configurable log levels
-- **EventBus interface**: Event subscription and emission
-- **Route interface**: Minimal route definition (method + path)
-- **Middleware type**: Standard Go `func(http.Handler) http.Handler` middleware
-- **RouterConfig struct**: Configuration for routers (address, TLS, base URL)
+- **RouteValidator**: Inspect the frozen route table before anything serves
+- **Route / RouteInfo**: Minimal route definition, and the router it is on
+- **RouterConfig struct**: Listener address, TLS, base URL, and every limit
+- **BodyLimitedRoute**: A per-route override of the router's body cap
 - **Option type**: Functional option for configuring Rex instances
-- **Security interfaces**: `SecuritySchemeAccessor` and `SecuredRouteAccessor` for cross-extension security contracts
-- **Helper functions**: `WithExtension` / `WithExtensions` for registering extensions
-- **Global security registry**: `RegisterSecuritySchemes` / `GetSecuritySchemes` (concurrent-safe)
+- **PerRouteMiddleware / PerRouterMiddleware**: Factories consulted once, when
+  the route table is built
+- **Router events**: `router.initialized`, `router.route.registered`,
+  `router.request.*`
+- **Helper functions**: `WithExtension` / `WithExtensions` for registering
+  extensions
+
+Re-exported from [`corex`](https://github.com/kryovyx/corex) — the shapes REX
+and WSX both need, declared once so the two frameworks cannot drift apart
+(**W22**):
+
+- **Middleware type** and the **`Priority*`** chain scale
+- **Problem / FieldError**: RFC 9457 problem details, the one error format
+- **OriginPolicy**: the allowlist CORS, CSRF and the WebSocket gateway share
+- **Logger** and **LogLevel**
+- **EventBus**, **Event**, **DropCounter**, **BaseEvent**
+- **Container / Resolver / Scope**: the DI contract, satisfied by `dix`
+- **BodySchema** family: `Scalar` / `OneOf` / `AnyOf` / `AllOf`
+- **Security interfaces**: `SecuritySchemeAccessor`, `SecuredRouteAccessor`,
+  `SchemeRegistry` and the optional scheme capabilities
+
+Every one of those is a **type alias**, so `rextension.Middleware` and
+`corex.Middleware` are one type. An extension written against this module
+needs no change and never names `corex`.
 
 ## Installation
 
@@ -236,20 +256,39 @@ opt := rextension.WithExtension(myExtension)
 opt := rextension.WithExtensions(ext1, ext2, ext3)
 ```
 
-## Global Security Registry
+## Security scheme registry
 
-A concurrent-safe, package-level registry for sharing security schemes between extensions (e.g., the security extension publishes schemes, the OpenAPI extension reads them):
+The security extension publishes its schemes for the OpenAPI extension to
+document, without either module importing the other. It does that by
+registering a `SchemeRegistry` in the DI container:
 
 ```go
-// Register schemes (typically called in OnInitialize or OnStart)
-rextension.RegisterSecuritySchemes([]rextension.SecuritySchemeAccessor{
-    myBearerScheme,
-    myAPIKeyScheme,
-})
+// In the security extension's OnInitialize
+r.Container().Instance(registry)
 
-// Retrieve a snapshot of registered schemes
-schemes := rextension.GetSecuritySchemes() // returns nil if none registered
+// In the OpenAPI extension's
+var registry rextension.SchemeRegistry
+if err := r.Container().Resolve(&registry); err == nil {
+    for _, scheme := range registry.Schemes() { ... }
+}
 ```
+
+### What this replaced
+
+There was a package-level slice here, written by `RegisterSecuritySchemes` and
+read by `GetSecuritySchemes`. It is gone (**D21**), and the reasons are worth
+keeping because they generalise:
+
+1. `RegisterSecuritySchemes` **replaced** the slice rather than appending, and
+   there was no unregister. Two Rex instances in one process clobbered each
+   other's schemes — whichever started last won, for both.
+2. The state outlived any single application, so it leaked between tests in
+   the same binary: a test that registered schemes changed the result of every
+   later test that read them.
+3. Nothing owned it, so nothing could reset it.
+
+An instance in the container gives the same decoupling with a lifetime bounded
+by the application that created it.
 
 ## Writing an Extension
 
@@ -288,7 +327,8 @@ func (e *MyExtension) OnShutdown(ctx context.Context, r rx.Rex) error { return n
 
 | Module | Purpose | Depends on |
 |--------|---------|------------|
-| `rextension` | Interface contracts for extensions | **nothing** |
+| `corex` | Shapes REX and WSX share | **nothing** |
+| `rextension` | HTTP contract for extensions | `corex` only |
 | `rex` | Full framework implementation | `rextension`, `dix` |
 | `rextension-*` | Extension implementations | `rextension` only (not `rex`, not `dix`) |
 
