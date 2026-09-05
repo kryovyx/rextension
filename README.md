@@ -346,6 +346,13 @@ The `rex` module re-exports all `rextension` types as aliases (e.g., `rex.Extens
 4. **Use the security interfaces**: If your extension deals with auth, implement `SecuritySchemeAccessor` / `SecuredRouteAccessor` to enable cross-extension OpenAPI documentation
 5. **Prefer `CreateRouter`**: Use dedicated routers for operational endpoints (health, metrics) to keep them separate from application traffic
 
+## Upgrading
+
+**v0.2.1 → v0.3.0.** [MIGRATION.md](MIGRATION.md) is the upgrade guide for this
+module, written to stand alone — it carries the dependency-ordered `go get`
+sequence, every breaking change here, and what to verify afterwards. Other
+modules of the framework each have their own; that file links to them.
+
 ## Contributing
 
 **The framework is in alpha, and external contributions open at `v1.0.0`.**
